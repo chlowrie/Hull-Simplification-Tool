@@ -1,4 +1,3 @@
-# %%
 import geopandas as gpd
 from scipy.spatial import ConvexHull
 from shapely.geometry import mapping, LineString
@@ -9,16 +8,14 @@ import matplotlib.pyplot as plt
 import argparse
 
 
-def get_contour(in_file='./data/Oahu_10m_nonoaa_contours.shp', contour=-2.0):
+def get_contour(in_file='./data/Oahu_10m_nonoaa_contours.shp', contour=-2.0, length_cutoff=0.25):
     contours = gpd.read_file(in_file)
-    # print(contours)
-    contours['shape_length'] = contours['geometry'].length
-    max_lengths = contours.groupby('ELEV')['shape_length'].idxmax()
-    contours = contours.set_index(['ID']).loc[max_lengths]
-    print(contours)
     contours = contours[contours['ELEV'] == contour]
-    print(contours)
-    return contours['geometry'].values[0]
+    contours['shape_length'] = contours['geometry'].length
+    max_lengths = contours.sort_values(by='shape_length', ascending=False).groupby('ELEV')['shape_length']
+    length_cutoff = max_lengths.nth(0).values[0] * 0.25
+    contours = contours[contours['shape_length'] > length_cutoff].set_index(['ID'])
+    return contours['geometry'].values
 
 
 def get_convex_points(contour_geom, plot=False):
@@ -83,10 +80,10 @@ def edge_to_edge_intersection(edge1, edge2, tol=0.001):
     return False
 
 
-def get_next_point(p0, points, index, distance=2000, plot=False):
+def get_next_point(p0, points, index, search_distance=2000, plot=False):
 
     def filter_by_distance(i):
-        return pt_to_pt_distance(p0, i) < distance
+        return pt_to_pt_distance(p0, i) < search_distance
 
     def filter_by_intersection(i):
         i_idx = points.index(i)
@@ -126,14 +123,14 @@ def get_next_point(p0, points, index, distance=2000, plot=False):
     return get_index_of_max_angle()
 
 
-def simplify_single_slice(points):
+def simplify_single_slice(points, search_distance):
     buff = []
     i = 0
     p0 = points[i]
     buff.append(p0)
     while i < len(points)-1:
         print(i)
-        next_idx = get_next_point(p0, points, i)
+        next_idx = get_next_point(p0, points, i, search_distance)
         p0 = points[next_idx]
         if next_idx == i:
             break
@@ -143,13 +140,13 @@ def simplify_single_slice(points):
     return buff
 
 
-def simplify_convex_slices(slices):
+def simplify_convex_slices(slices, search_distance):
     buff = []
     print('Slices: {}'.format(len(slices)))
     slice_number = 0
     for points in slices:
         print('Slice {}'.format(slice_number))
-        buff.append(simplify_single_slice(points))
+        buff.append(simplify_single_slice(points, search_distance))
         slice_number += 1
     return np.concatenate(buff)
 
@@ -163,31 +160,45 @@ def test_is_clockwise(points):
     idxs = range(len(points)-1)
     clockwise_test = list(map(lambda i: test_index(i), idxs))
     return sum(clockwise_test) > 0
-    
 
-def main(in_shp, out_shp, contour_line):
-    parsed_contour = get_contour(in_shp, contour_line)
-    assert(test_is_clockwise(parsed_contour.coords))
-    convex_idxs = get_convex_points(parsed_contour)
-    slices = get_contour_convex_slices(parsed_contour, convex_idxs)
-    points = simplify_convex_slices(slices)
+
+def make_clockwise(points):
+    if test_is_clockwise(points):
+        return LineString(list(points))
+    return LineString(list(points)[::-1])
+
+def main(in_shp, out_shp, contour_line, search_distance, length_cutoff):
+    parsed_contours = get_contour(in_shp, contour_line, length_cutoff)
+    parsed_contours = [make_clockwise(contour.coords) for contour in parsed_contours]
+    # print(parsed_contours[0].coords)
+    # assert(test_is_clockwise(parsed_contours[0].coords))
+    points = []
+    for parsed_contour in parsed_contours:
+        convex_idxs = get_convex_points(parsed_contour)
+        slices = get_contour_convex_slices(parsed_contour, convex_idxs)
+        points.append(simplify_convex_slices(slices, search_distance))
 
     schema= {
         'geometry': 'LineString',
         'properties': {}
     }
 
-    with fiona.open(out_shp, 'w', 'ESRI Shapefile', schema) as out:
-        line = LineString(points)
-        out.write({
-            'geometry': mapping(line),
-            'properties': {}
-        })
+    input_crs = fiona.open(in_shp, 'r').crs
+
+    with fiona.open(out_shp, 'w', crs=input_crs, driver='ESRI Shapefile', schema=schema) as out:
+        for pointset in points:
+            line = LineString(pointset)
+            out.write({
+                'geometry': mapping(line),
+                'properties': {}
+            })
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description = 'Generate an exterior simplification for a closed line segment')
+    parser = argparse.ArgumentParser(description = 'Generate an exterior simplification shell for a closed line segment')
     parser.add_argument('in_shp', type=str, help='SHP to process')
     parser.add_argument('out_shp', type=str, help='File to write to')
     parser.add_argument('--contour_line', type=float, default=-2.0, help='The contour value to simplify.  Default is -2.0.  Field name should be "ELEV".')
+    parser.add_argument('--search_distance', type=int, default=2000, help='Distance to search for next shell point')
+    parser.add_argument('--length_cutoff', type=float, default=0.25, help='The percentage length of the maximum contour to process.')
     args = parser.parse_args()
-    main(args.in_shp, args.out_shp, args.contour_line)
+    main(args.in_shp, args.out_shp, args.contour_line, args.search_distance, args.length_cutoff)

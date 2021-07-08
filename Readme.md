@@ -1,17 +1,11 @@
 <h1>Hull Simplification Tool</h1>
 This script is to create a constrained exterior hull.  It is similar to a local convex hull, where the convexity is determined by a search radius.
-
 <br>
-<br>
-<b>Next Steps:</b>
+Flags: (*=required)
 <ul>
-    <li>Parameterize to take an input shapefile and an input radius
-    <li>Write output to .SHP
-    <li>Assertions for geometry input:
-    <ul>
-        <li>Unique Points
-        <li>Clockwise Orientation
-    </ul>
-    <li>Make it fast
-    <li>Package with PyExe
+    <li>in_shp*</li>
+    <li>out_shp*</li>
+    <li>--contour_line : the contour value to simplify. Default ELEV=-2.0</li>
+    <li>--search_distance : Distance to search for the next shell simplification point.</li>
+    <li>--length_cutoff : The percentage length of the maximum contour.  Default 0.25.  Should be set lower if the DEM contains multiple islands of different sizes.</li>
 </ul>
