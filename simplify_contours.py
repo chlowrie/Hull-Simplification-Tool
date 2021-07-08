@@ -2,17 +2,22 @@
 import geopandas as gpd
 from scipy.spatial import ConvexHull
 from shapely.geometry import mapping, LineString
+import fiona
 import numpy as np
 import math
 import matplotlib.pyplot as plt
+import argparse
 
 
 def get_contour(in_file='./data/Oahu_10m_nonoaa_contours.shp', contour=-2.0):
     contours = gpd.read_file(in_file)
+    # print(contours)
     contours['shape_length'] = contours['geometry'].length
     max_lengths = contours.groupby('ELEV')['shape_length'].idxmax()
     contours = contours.set_index(['ID']).loc[max_lengths]
+    print(contours)
     contours = contours[contours['ELEV'] == contour]
+    print(contours)
     return contours['geometry'].values[0]
 
 
@@ -160,32 +165,29 @@ def test_is_clockwise(points):
     return sum(clockwise_test) > 0
     
 
-contour_2m = get_contour()
-assert(test_is_clockwise(contour_2m.coords))
-coords = list(zip(*contour_2m.coords.xy))
-convex_idxs = get_convex_points(contour_2m)
-slices = get_contour_convex_slices(contour_2m, convex_idxs)
-points = simplify_convex_slices(slices)
+def main(in_shp, out_shp, contour_line):
+    parsed_contour = get_contour(in_shp, contour_line)
+    assert(test_is_clockwise(parsed_contour.coords))
+    convex_idxs = get_convex_points(parsed_contour)
+    slices = get_contour_convex_slices(parsed_contour, convex_idxs)
+    points = simplify_convex_slices(slices)
 
-with open('output.txt', 'w') as out:
-    out.write(LineString(points).wkt)
+    schema= {
+        'geometry': 'LineString',
+        'properties': {}
+    }
 
-# %%
-plt.plot([i[0] for i in coords], [i[1] for i in coords], 'b', lw=0.1)
-plt.plot([i[0] for i in points], [i[1] for i in points], 'r--', lw=0.2)
-plt.show()
+    with fiona.open(out_shp, 'w', 'ESRI Shapefile', schema) as out:
+        line = LineString(points)
+        out.write({
+            'geometry': mapping(line),
+            'properties': {}
+        })
 
-# %%
-
-u=[0,1]
-v=[1,1]
-l=math.sqrt((math.pow(u[0], 2) +  math.pow(u[1],2)) * (math.pow(v[0], 2) + math.pow(v[1],2)))
-theta = math.acos(u[0]*v[1] - u[1]*v[0] / l)
-
-# %%
-
-print(calculate_angle((0,0), (1,0))) #Right
-print(calculate_angle((0,0), (0,1))) #Top
-print(calculate_angle((0,0), (-1,0))) #Left
-print(calculate_angle((0,0), (0,-1))) #Bottom
-# %%
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description = 'Generate an exterior simplification for a closed line segment')
+    parser.add_argument('in_shp', type=str, help='SHP to process')
+    parser.add_argument('out_shp', type=str, help='File to write to')
+    parser.add_argument('--contour_line', type=float, default=-2.0, help='The contour value to simplify.  Default is -2.0.  Field name should be "ELEV".')
+    args = parser.parse_args()
+    main(args.in_shp, args.out_shp, args.contour_line)
